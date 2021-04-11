@@ -1,4 +1,4 @@
-﻿#include "cuda_runtime.h"
+#include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 #include "canvas.h"
 
@@ -33,7 +33,7 @@ public:
 		this->x4 = x4; this->y4 = y4; this->z4 = z4;
 		this->Rad = Rad;
 	}
-	figure(){}
+	figure() {}
 };
 
 __host__ figure* scene_objects(std::string filename, size_t* figure_count)
@@ -199,27 +199,31 @@ public:
 	double log_value;
 }GPU_log;
 
-__global__ void raytrace_kernel(uint8_t* frame, 
-	double* objects, 
+__global__ void raytrace_kernel(uint8_t* frame,
+	double* objects,
 	double* geometry_data, int thread_scope, GPU_log* log)
-//                                  geometry_data = light upvect ortsup camera lu_corner
+	//                                  geometry_data = light upvect ortsup camera lu_corner
 {
 	int x_scr_0 = blockIdx.x * thread_scope;
 	int y_scr_0 = threadIdx.x;
 
+	// Unpacking to shared memory block 
 	__shared__ size_t f_count; f_count = geometry_data[17];
 	__shared__ int scr_width; scr_width = geometry_data[15];
 	__shared__ int scr_height; scr_height = geometry_data[16];
 	__shared__ double camera[3]; camera[0] = geometry_data[9]; camera[1] = geometry_data[10]; camera[2] = geometry_data[11];
 	__shared__ double light[3]; light[0] = geometry_data[0]; light[1] = geometry_data[1]; light[2] = geometry_data[2];
+	__shared__ double lu_cor[3]; lu_cor[0] = geometry_data[12]; lu_cor[1] = geometry_data[13]; lu_cor[2] = geometry_data[14];
+	__shared__ double ortsup[3]; ortsup[0] = geometry_data[6]; ortsup[1] = geometry_data[7]; ortsup[2] = geometry_data[8];
+	__shared__ double upvect[3]; upvect[0] = geometry_data[3]; upvect[1] = geometry_data[4]; upvect[2] = geometry_data[5];
 
 	for (int i = 0; i < thread_scope + 1; ++i)
 	{
 		int x_scr = x_scr_0 + i;
 		int y_scr = y_scr_0;
-		double x_phys = geometry_data[12] + x_scr * geometry_data[6] + y_scr * geometry_data[3];
-		double y_phys = geometry_data[13] + x_scr * geometry_data[7] + y_scr * geometry_data[4];
-		double z_phys = geometry_data[14] + x_scr * geometry_data[8] + y_scr * geometry_data[5];
+		double x_phys = lu_cor[0] + x_scr * ortsup[0] + y_scr * upvect[0];
+		double y_phys = lu_cor[1] + x_scr * ortsup[1] + y_scr * upvect[1];
+		double z_phys = lu_cor[2] + x_scr * ortsup[2] + y_scr * upvect[2];
 		double trace_ray[3] = { x_phys - camera[0], y_phys - camera[1], z_phys - camera[2] };
 		int R, G, B;
 		double surface_normal[3] = { 0,0,0 };
@@ -265,13 +269,13 @@ __global__ void raytrace_kernel(uint8_t* frame,
 				light_vect[2] * surface_normal[2]) / (sqrt(light_vect[0] * light_vect[0] + light_vect[1] * light_vect[1] +
 					light_vect[2] * light_vect[2]) * sqrt(surface_normal[0] * surface_normal[0] + surface_normal[1] * surface_normal[1] +
 						surface_normal[2] * surface_normal[2]));
-			if (cos_alpha+0.2 < 0) cos_alpha = -0.2;
-			R = static_cast<int>(R * pow(cos_alpha+0.2, 1.5));
-			G = static_cast<int>(G * pow(cos_alpha+0.2, 1.5));
-			B = static_cast<int>(B * pow(cos_alpha+0.2, 1.5));
-			frame[(scr_height - y_scr - 1) * scr_width*3 + 3 * x_scr] = B;
-			frame[(scr_height - y_scr - 1) * scr_width*3 + 3 * x_scr + 1] = G;
-			frame[(scr_height - y_scr - 1) * scr_width*3 + 3 * x_scr + 2] = R;
+			if (cos_alpha + 0.2 < 0) cos_alpha = -0.2;
+			R = static_cast<int>(R * pow(cos_alpha + 0.2, 1.5));
+			G = static_cast<int>(G * pow(cos_alpha + 0.2, 1.5));
+			B = static_cast<int>(B * pow(cos_alpha + 0.2, 1.5));
+			frame[(scr_height - y_scr - 1) * scr_width * 3 + 3 * x_scr] = B;
+			frame[(scr_height - y_scr - 1) * scr_width * 3 + 3 * x_scr + 1] = G;
+			frame[(scr_height - y_scr - 1) * scr_width * 3 + 3 * x_scr + 2] = R;
 		}
 	}
 }
@@ -280,7 +284,7 @@ __host__ int main(int argc, char* argv[])
 {
 	std::string objects = "objects.txt";
 	std::string props = "properties.txt";
-	std::string save_name = "image_3.bmp";
+	std::string save_name = "image_1.bmp";
 
 	/* ========================= */
 
@@ -336,7 +340,7 @@ __host__ int main(int argc, char* argv[])
 	double* packed_vect_data = new double[18]; // light upvect ortsup camera lu_corner
 	double* packed_objs_data = pack_objects(Scene_objects, fig_count);
 	uint8_t* device_canvas;
-	GPU_log* device_log, *host_log = new GPU_log;
+	GPU_log* device_log, * host_log = new GPU_log;
 	packed_vect_data[0] = light[0]; packed_vect_data[1] = light[1]; packed_vect_data[2] = light[2];
 	packed_vect_data[3] = upvector[0]; packed_vect_data[4] = upvector[1]; packed_vect_data[5] = upvector[2];
 	packed_vect_data[6] = ort_sup[0]; packed_vect_data[7] = ort_sup[1]; packed_vect_data[8] = ort_sup[2];
@@ -344,9 +348,9 @@ __host__ int main(int argc, char* argv[])
 	packed_vect_data[12] = lu_corner[0]; packed_vect_data[13] = lu_corner[1]; packed_vect_data[14] = lu_corner[2];
 	packed_vect_data[15] = screen_width; packed_vect_data[16] = screen_height; packed_vect_data[17] = fig_count;
 
-	if (cudaMalloc(&device_geom_data, 18*sizeof(double)) != cudaSuccess ||
+	if (cudaMalloc(&device_geom_data, 18 * sizeof(double)) != cudaSuccess ||
 		cudaMalloc(&device_objs_data, (17 * fig_count) * sizeof(double)) != cudaSuccess ||
-		cudaMalloc(&device_canvas, sizeof(uint8_t)*frame.pixlen) != cudaSuccess ||
+		cudaMalloc(&device_canvas, sizeof(uint8_t) * frame.pixlen) != cudaSuccess ||
 		cudaMalloc(&device_log, sizeof(GPU_log)) != cudaSuccess)
 	{
 		std::cout << "Error occured while tried to allocate memory on GPU" << std::endl;
@@ -365,10 +369,10 @@ __host__ int main(int argc, char* argv[])
 	}
 
 	// Invoking kernel
-	raytrace_kernel <<<screen_width / blocks_dimension.first, screen_height>>> (device_canvas, 
-		device_objs_data, 
-		device_geom_data, 
-		blocks_dimension.first, 
+	raytrace_kernel << <screen_width / blocks_dimension.first, screen_height >> > (device_canvas,
+		device_objs_data,
+		device_geom_data,
+		blocks_dimension.first,
 		device_log);
 	if (cudaMemcpy(frame.pixels, device_canvas, sizeof(uint8_t) * frame.pixlen, cudaMemcpyDeviceToHost) != cudaSuccess ||
 		cudaMemcpy(host_log, device_log, sizeof(GPU_log), cudaMemcpyDeviceToHost))
@@ -376,7 +380,7 @@ __host__ int main(int argc, char* argv[])
 		std::cout << "Error occured while tried to transfer data from GPU" << std::endl;
 		exit(-1);
 	}
-	
+
 	///* Revise logvalue if needed */
 	//std::cout << "Log value is: " << host_log->log_value << std::endl;
 	///* ========================= */

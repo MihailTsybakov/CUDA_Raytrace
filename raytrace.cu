@@ -6,6 +6,7 @@
 #include <string>
 #include <fstream>
 #include <cmath>
+#include <cstdio>
 
 class figure
 {
@@ -33,7 +34,7 @@ public:
 		this->x4 = x4; this->y4 = y4; this->z4 = z4;
 		this->Rad = Rad;
 	}
-	figure() {}
+	figure(){}
 };
 
 __host__ figure* scene_objects(std::string filename, size_t* figure_count)
@@ -149,10 +150,15 @@ __host__ void to_length(double* vec, double length)
 	vec[0] *= K; vec[1] *= K; vec[2] *= K;
 }
 
-__host__ std::pair<int, int> optimal_dimension(int screen_width, int screen_height, int max_threads)
+__host__ std::pair<int, int> optimal_dimension(int screen_width, 
+	int screen_height, 
+	int max_threads, 
+	int multiprocessors, 
+	int threads_per_block)
 {
-	int choosen_w = 105;
-	if (screen_width % 5 != 0)
+	int thread_scope = 105;
+	int pix_count = screen_width * screen_height;
+	if (pix_count % 5 != 0)
 	{
 		std::cout << "Error: unsupported image resolution." << std::endl;
 		std::cout << "Please add manually needed block dimension to function 'optimal dimension'" << std::endl;
@@ -160,12 +166,15 @@ __host__ std::pair<int, int> optimal_dimension(int screen_width, int screen_heig
 	}
 	for (int dim = 100; dim >= 1; dim -= 5)
 	{
-		if (dim < choosen_w && screen_width % dim == 0 && screen_height * (screen_width / dim) < max_threads)
+		if (dim < thread_scope && pix_count % dim == 0 && pix_count / dim < max_threads)
 		{
-			choosen_w = dim;
+			thread_scope = dim;
 		}
 	}
-	return std::pair<int, int>(choosen_w, screen_height);
+	int thread_number = pix_count / thread_scope;
+	int block_number = multiprocessors;
+	while ((thread_number % block_number != 0) || (thread_number / block_number >= threads_per_block)) block_number++;
+	return std::pair<int, int>(thread_number, block_number);
 }
 
 __host__ double* pack_objects(figure* objects, size_t fig_count)
@@ -199,24 +208,30 @@ public:
 	double log_value;
 }GPU_log;
 
-__global__ void raytrace_kernel(uint8_t* frame,
-	double* objects,
+__global__ void raytrace_kernel(uint8_t* frame, 
+	double* objects, 
 	double* geometry_data, int thread_scope, GPU_log* log)
-	//                                  geometry_data = light upvect ortsup camera lu_corner
+//          geometry_data = light upvect ortsup camera lu_corner w h f_count
 {
-	int x_scr_0 = blockIdx.x * thread_scope;
-	int y_scr_0 = threadIdx.x;
-
-	// Unpacking to shared memory block 
+	// Unpacking to shared block memory section
 	__shared__ size_t f_count; f_count = geometry_data[17];
 	__shared__ int scr_width; scr_width = geometry_data[15];
 	__shared__ int scr_height; scr_height = geometry_data[16];
 	__shared__ double camera[3]; camera[0] = geometry_data[9]; camera[1] = geometry_data[10]; camera[2] = geometry_data[11];
 	__shared__ double light[3]; light[0] = geometry_data[0]; light[1] = geometry_data[1]; light[2] = geometry_data[2];
-	__shared__ double lu_cor[3]; lu_cor[0] = geometry_data[12]; lu_cor[1] = geometry_data[13]; lu_cor[2] = geometry_data[14];
-	__shared__ double ortsup[3]; ortsup[0] = geometry_data[6]; ortsup[1] = geometry_data[7]; ortsup[2] = geometry_data[8];
 	__shared__ double upvect[3]; upvect[0] = geometry_data[3]; upvect[1] = geometry_data[4]; upvect[2] = geometry_data[5];
+	__shared__ double ortsup[3]; ortsup[0] = geometry_data[6]; ortsup[1] = geometry_data[7]; ortsup[2] = geometry_data[8];
+	__shared__ double lu_cor[3]; lu_cor[0] = geometry_data[12]; lu_cor[1] = geometry_data[13]; lu_cor[2] = geometry_data[14];
 
+	int reverse_num = (threadIdx.x + blockIdx.x * blockDim.x)*60;
+	int geometry_num = scr_width * scr_height - reverse_num - 1;
+	// x = geom_num - width * y  | integer equation
+	int y_scr_0 = 0, x_scr_0 = geometry_num - scr_width*y_scr_0;
+	while (x_scr_0 >= scr_width)
+	{
+		y_scr_0++;
+		x_scr_0 = geometry_num - scr_width * y_scr_0;
+	}
 	for (int i = 0; i < thread_scope + 1; ++i)
 	{
 		int x_scr = x_scr_0 + i;
@@ -269,13 +284,13 @@ __global__ void raytrace_kernel(uint8_t* frame,
 				light_vect[2] * surface_normal[2]) / (sqrt(light_vect[0] * light_vect[0] + light_vect[1] * light_vect[1] +
 					light_vect[2] * light_vect[2]) * sqrt(surface_normal[0] * surface_normal[0] + surface_normal[1] * surface_normal[1] +
 						surface_normal[2] * surface_normal[2]));
-			if (cos_alpha + 0.2 < 0) cos_alpha = -0.2;
-			R = static_cast<int>(R * pow(cos_alpha + 0.2, 1.5));
-			G = static_cast<int>(G * pow(cos_alpha + 0.2, 1.5));
-			B = static_cast<int>(B * pow(cos_alpha + 0.2, 1.5));
-			frame[(scr_height - y_scr - 1) * scr_width * 3 + 3 * x_scr] = B;
-			frame[(scr_height - y_scr - 1) * scr_width * 3 + 3 * x_scr + 1] = G;
-			frame[(scr_height - y_scr - 1) * scr_width * 3 + 3 * x_scr + 2] = R;
+			if (cos_alpha+0.2 < 0) cos_alpha = -0.2;
+			R = static_cast<int>(R * pow(cos_alpha+0.2, 1.5));
+			G = static_cast<int>(G * pow(cos_alpha+0.2, 1.5));
+			B = static_cast<int>(B * pow(cos_alpha+0.2, 1.5));
+			frame[(scr_height - y_scr - 1) * scr_width*3 + 3 * x_scr] = B;
+			frame[(scr_height - y_scr - 1) * scr_width*3 + 3 * x_scr + 1] = G;
+			frame[(scr_height - y_scr - 1) * scr_width*3 + 3 * x_scr + 2] = R;
 		}
 	}
 }
@@ -284,7 +299,7 @@ __host__ int main(int argc, char* argv[])
 {
 	std::string objects = "objects.txt";
 	std::string props = "properties.txt";
-	std::string save_name = "image_1.bmp";
+	std::string save_name = "image_3.bmp";
 
 	/* ========================= */
 
@@ -328,19 +343,22 @@ __host__ int main(int argc, char* argv[])
 	}
 	cudaDeviceProp device_properties;
 	cudaGetDeviceProperties(&device_properties, 0);
-	int SM_s = device_properties.multiProcessorCount;
+	int mp_count = device_properties.multiProcessorCount;
 	int supported_threads = device_properties.maxThreadsPerMultiProcessor;
-	int max_threads = SM_s * supported_threads;
+	int sup_threads_per_block = device_properties.maxThreadsPerBlock;
+	int max_threads = mp_count * supported_threads;
 
-	std::pair<int, int> blocks_dimension = optimal_dimension(screen_width, screen_height, max_threads);
+	std::pair<int, int> grid_params = optimal_dimension(screen_width, screen_height, max_threads, mp_count, sup_threads_per_block);
+	int block_size = grid_params.first / grid_params.second;
+	int thread_scope = screen_width * screen_height / grid_params.first;
 
 	// Packing & transfering data to gpu
 	double* device_geom_data;
 	double* device_objs_data;
-	double* packed_vect_data = new double[18]; // light upvect ortsup camera lu_corner
+	double* packed_vect_data = new double[18]; // light upvect ortsup camera lu_corner w h f_count
 	double* packed_objs_data = pack_objects(Scene_objects, fig_count);
 	uint8_t* device_canvas;
-	GPU_log* device_log, * host_log = new GPU_log;
+	GPU_log* device_log, *host_log = new GPU_log;
 	packed_vect_data[0] = light[0]; packed_vect_data[1] = light[1]; packed_vect_data[2] = light[2];
 	packed_vect_data[3] = upvector[0]; packed_vect_data[4] = upvector[1]; packed_vect_data[5] = upvector[2];
 	packed_vect_data[6] = ort_sup[0]; packed_vect_data[7] = ort_sup[1]; packed_vect_data[8] = ort_sup[2];
@@ -348,9 +366,9 @@ __host__ int main(int argc, char* argv[])
 	packed_vect_data[12] = lu_corner[0]; packed_vect_data[13] = lu_corner[1]; packed_vect_data[14] = lu_corner[2];
 	packed_vect_data[15] = screen_width; packed_vect_data[16] = screen_height; packed_vect_data[17] = fig_count;
 
-	if (cudaMalloc(&device_geom_data, 18 * sizeof(double)) != cudaSuccess ||
+	if (cudaMalloc(&device_geom_data, 18*sizeof(double)) != cudaSuccess ||
 		cudaMalloc(&device_objs_data, (17 * fig_count) * sizeof(double)) != cudaSuccess ||
-		cudaMalloc(&device_canvas, sizeof(uint8_t) * frame.pixlen) != cudaSuccess ||
+		cudaMalloc(&device_canvas, sizeof(uint8_t)*frame.pixlen) != cudaSuccess ||
 		cudaMalloc(&device_log, sizeof(GPU_log)) != cudaSuccess)
 	{
 		std::cout << "Error occured while tried to allocate memory on GPU" << std::endl;
@@ -369,10 +387,10 @@ __host__ int main(int argc, char* argv[])
 	}
 
 	// Invoking kernel
-	raytrace_kernel << <screen_width / blocks_dimension.first, screen_height >> > (device_canvas,
-		device_objs_data,
-		device_geom_data,
-		blocks_dimension.first,
+	raytrace_kernel <<<grid_params.second, block_size>>> (device_canvas,
+		device_objs_data, 
+		device_geom_data, 
+		thread_scope, 
 		device_log);
 	if (cudaMemcpy(frame.pixels, device_canvas, sizeof(uint8_t) * frame.pixlen, cudaMemcpyDeviceToHost) != cudaSuccess ||
 		cudaMemcpy(host_log, device_log, sizeof(GPU_log), cudaMemcpyDeviceToHost))
@@ -380,7 +398,7 @@ __host__ int main(int argc, char* argv[])
 		std::cout << "Error occured while tried to transfer data from GPU" << std::endl;
 		exit(-1);
 	}
-
+	
 	///* Revise logvalue if needed */
 	//std::cout << "Log value is: " << host_log->log_value << std::endl;
 	///* ========================= */
@@ -409,4 +427,3 @@ __host__ int main(int argc, char* argv[])
 	std::cout << "Done." << std::endl;
 	return 0;
 }
-

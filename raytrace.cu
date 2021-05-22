@@ -157,7 +157,7 @@ __host__ std::pair<int, int> optimal_dimension(int screen_width,
 	int multiprocessors, 
 	int threads_per_block)
 {
-	int thread_scope = 105;
+	int thread_scope = 505;
 	int pix_count = screen_width * screen_height;
 	if (pix_count % 5 != 0)
 	{
@@ -165,7 +165,7 @@ __host__ std::pair<int, int> optimal_dimension(int screen_width,
 		std::cout << "Please add manually needed block dimension to function 'optimal dimension'" << std::endl;
 		exit(-1);
 	}
-	for (int dim = 100; dim >= 1; dim -= 5)
+	for (int dim = 500; dim >= 1; dim -= 5)
 	{
 		if (dim < thread_scope && pix_count % dim == 0 && pix_count / dim < max_threads)
 		{
@@ -173,7 +173,7 @@ __host__ std::pair<int, int> optimal_dimension(int screen_width,
 		}
 	}
 	int thread_number = pix_count / thread_scope;
-	int block_number = multiprocessors;
+	int block_number = 3*multiprocessors;
 	while ((thread_number % block_number != 0) || (thread_number / block_number >= threads_per_block)) block_number++;
 	return std::pair<int, int>(thread_number, block_number);
 }
@@ -287,10 +287,10 @@ __global__ void raytrace_kernel(uint8_t* frame,
 				light_vect[2] * surface_normal[2]) / (sqrt(light_vect[0] * light_vect[0] + light_vect[1] * light_vect[1] +
 					light_vect[2] * light_vect[2]) * sqrt(surface_normal[0] * surface_normal[0] + surface_normal[1] * surface_normal[1] +
 						surface_normal[2] * surface_normal[2]));
-			if (cos_alpha+0.2 < 0) cos_alpha = -0.2;
-			R = static_cast<int>(R * pow(cos_alpha+0.2, 1.5));
-			G = static_cast<int>(G * pow(cos_alpha+0.2, 1.5));
-			B = static_cast<int>(B * pow(cos_alpha+0.2, 1.5));
+			if (cos_alpha + 0.2 < 0) cos_alpha = -0.2;
+			R = static_cast<int>(R * pow(cos_alpha + 0.2, 1.5)); if (R > 255) R = 255;
+			G = static_cast<int>(G * pow(cos_alpha + 0.2, 1.5)); if (G > 255) G = 255;
+			B = static_cast<int>(B * pow(cos_alpha + 0.2, 1.5)); if (B > 255) B = 255;
 			frame[(scr_height - y_scr - 1) * scr_width*3 + 3 * x_scr] = B;
 			frame[(scr_height - y_scr - 1) * scr_width*3 + 3 * x_scr + 1] = G;
 			frame[(scr_height - y_scr - 1) * scr_width*3 + 3 * x_scr + 2] = R;
@@ -351,9 +351,14 @@ __host__ int main(int argc, char* argv[])
 	int sup_threads_per_block = device_properties.maxThreadsPerBlock;
 	int max_threads = mp_count * supported_threads;
 
+	int max_blocks = device_properties.maxBlocksPerMultiProcessor;
+	int max_surface = device_properties.maxSurface1D;
+	int shared_memory_per_block = device_properties.sharedMemPerBlock;
+
+	std::cout << "Max shared memory per block available: " << shared_memory_per_block << std::endl;
+
 	std::pair<int, int> grid_params = optimal_dimension(screen_width, screen_height, max_threads, mp_count, sup_threads_per_block);
 	int block_size = grid_params.first / grid_params.second;
-	//std::cout << "Thread number: " << grid_params.first << std::endl;
 	int thread_scope = screen_width * screen_height / grid_params.first;
 
 	// Packing & transfering data to gpu
@@ -390,14 +395,29 @@ __host__ int main(int argc, char* argv[])
 		exit(-1);
 	}
 
+	dim3 grid_dimension; grid_dimension.x = grid_params.second;
+	grid_dimension.y = grid_dimension.z = 1;
+	dim3 block_dimension; block_dimension.x = block_size;
+	block_dimension.y = block_dimension.z = 1;
+
+	// =============================== 
+	dim3 max_grid(device_properties.maxGridSize[0], device_properties.maxGridSize[1], device_properties.maxGridSize[2]);
+	dim3 max_block(device_properties.maxThreadsDim[0], device_properties.maxThreadsDim[1], device_properties.maxThreadsDim[2]);
+	std::cout << "Maximum grid dim is: (" << max_grid.x << " " << max_grid.y << " " << max_grid.z << ")" << std::endl;
+	std::cout << "Current grid dim is: (" << grid_dimension.x << " " << grid_dimension.y << " " << grid_dimension.z << ")" << std::endl;
+	std::cout << "Maximum block dim is: (" << max_block.x << " " << max_block.y << " " << max_block.z << ")" << std::endl;
+	std::cout << "Current block dim is: (" << block_dimension.x << " " << block_dimension.y << " " << block_dimension.z << ")" << std::endl;
+	// ===============================
+
 	// Invoking kernel
 	auto start = std::chrono::system_clock::now();
 
-	raytrace_kernel <<<grid_params.second, block_size>>> (device_canvas,
+	raytrace_kernel <<<grid_dimension, block_dimension>>> (device_canvas,
 		device_objs_data, 
 		device_geom_data, 
 		thread_scope, 
 		device_log);
+
 	if (cudaMemcpy(frame.pixels, device_canvas, sizeof(uint8_t) * frame.pixlen, cudaMemcpyDeviceToHost) != cudaSuccess ||
 		cudaMemcpy(host_log, device_log, sizeof(GPU_log), cudaMemcpyDeviceToHost))
 	{
@@ -437,3 +457,4 @@ __host__ int main(int argc, char* argv[])
 
 	return 0;
 }
+

@@ -7,6 +7,7 @@
 #include <fstream>
 #include <cmath>
 #include <cstdio>
+#include <chrono>
 
 class figure
 {
@@ -223,7 +224,7 @@ __global__ void raytrace_kernel(uint8_t* frame,
 	__shared__ double ortsup[3]; ortsup[0] = geometry_data[6]; ortsup[1] = geometry_data[7]; ortsup[2] = geometry_data[8];
 	__shared__ double lu_cor[3]; lu_cor[0] = geometry_data[12]; lu_cor[1] = geometry_data[13]; lu_cor[2] = geometry_data[14];
 
-	int reverse_num = (threadIdx.x + blockIdx.x * blockDim.x)*60;
+	int reverse_num = (threadIdx.x + blockIdx.x * blockDim.x)*thread_scope;
 	int geometry_num = scr_width * scr_height - reverse_num - 1;
 	// x = geom_num - width * y  | integer equation
 	int y_scr_0 = 0, x_scr_0 = geometry_num - scr_width*y_scr_0;
@@ -232,6 +233,7 @@ __global__ void raytrace_kernel(uint8_t* frame,
 		y_scr_0++;
 		x_scr_0 = geometry_num - scr_width * y_scr_0;
 	}
+	volatile bool intersected;
 	for (int i = 0; i < thread_scope + 1; ++i)
 	{
 		int x_scr = x_scr_0 + i;
@@ -243,7 +245,7 @@ __global__ void raytrace_kernel(uint8_t* frame,
 		int R, G, B;
 		double surface_normal[3] = { 0,0,0 };
 		double intersection[3] = { 0,0,0 };
-		bool intersected = false;
+		intersected = false;
 
 		for (size_t i = 0; i < f_count; ++i)
 		{
@@ -275,9 +277,10 @@ __global__ void raytrace_kernel(uint8_t* frame,
 			else
 			{
 				/* Unknown shape type */
+				printf("Error: Unknown object type\n");
 			}
 		}
-		if (intersected)
+		if (intersected == true)
 		{
 			double light_vect[3] = { light[0] - intersection[0], light[1] - intersection[1], light[2] - intersection[2] };
 			double cos_alpha = (light_vect[0] * surface_normal[0] + light_vect[1] * surface_normal[1] +
@@ -299,7 +302,7 @@ __host__ int main(int argc, char* argv[])
 {
 	std::string objects = "objects.txt";
 	std::string props = "properties.txt";
-	std::string save_name = "image_3.bmp";
+	std::string save_name = "image_2.bmp";
 
 	/* ========================= */
 
@@ -350,6 +353,7 @@ __host__ int main(int argc, char* argv[])
 
 	std::pair<int, int> grid_params = optimal_dimension(screen_width, screen_height, max_threads, mp_count, sup_threads_per_block);
 	int block_size = grid_params.first / grid_params.second;
+	//std::cout << "Thread number: " << grid_params.first << std::endl;
 	int thread_scope = screen_width * screen_height / grid_params.first;
 
 	// Packing & transfering data to gpu
@@ -387,6 +391,8 @@ __host__ int main(int argc, char* argv[])
 	}
 
 	// Invoking kernel
+	auto start = std::chrono::system_clock::now();
+
 	raytrace_kernel <<<grid_params.second, block_size>>> (device_canvas,
 		device_objs_data, 
 		device_geom_data, 
@@ -398,6 +404,11 @@ __host__ int main(int argc, char* argv[])
 		std::cout << "Error occured while tried to transfer data from GPU" << std::endl;
 		exit(-1);
 	}
+
+	auto end = std::chrono::system_clock::now();
+
+	int elapsed_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
+	std::cout << "Elapsed ms: " << elapsed_ms << std::endl;
 	
 	///* Revise logvalue if needed */
 	//std::cout << "Log value is: " << host_log->log_value << std::endl;
@@ -424,6 +435,5 @@ __host__ int main(int argc, char* argv[])
 	delete[] lu_corner;
 	delete host_log;
 
-	std::cout << "Done." << std::endl;
 	return 0;
 }
